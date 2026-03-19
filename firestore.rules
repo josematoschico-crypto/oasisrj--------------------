@@ -1,0 +1,134 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} (matches Firebase Auth UID)
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required)
+    //   - email: string (optional, format: email)
+    //   - phoneNumber: string (optional)
+    //   - bio: string (optional)
+    //   - avatarUrl: string (optional)
+    //   - avatarScale: number (optional)
+    //   - avatarOffset: number (optional)
+    //   - walletId: string (required)
+    //   - balance: number (optional)
+    //   - role: string (optional, enum: ["admin", "user"])
+    //   - holdings: list (optional, items: {assetId, fractionsOwned, averagePrice})
+    //   - transactions: list (optional, items: {id, type, assetId, amount, timestamp, status})
+    //
+    // Collection: assets
+    // Document ID: {assetId}
+    // Fields:
+    //   - id: string (required)
+    //   - title: string (required)
+    //   - artist: string (required)
+    //   - year: string (optional)
+    //   - totalValue: number (required)
+    //   - fractionPrice: number (required)
+    //   - totalFractions: number (optional)
+    //   - availableFractions: number (optional)
+    //   - imageUrl: string (optional)
+    //   - gallery: list (optional)
+    //   - insuranceStatus: string (optional, enum: ["SECURED", "WARNING", "EXPIRED"])
+    //   - insuranceCompany: string (optional)
+    //   - policyNumber: string (optional)
+    //   - insuranceExpiry: string (optional)
+    //   - technicalReportUrl: string (optional)
+    //   - description: string (optional)
+    //   - isCatalogOnly: bool (optional)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "arquivooasis@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() < 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             (!('email' in data) || isValidEmail(data.email)) &&
+             (!('phoneNumber' in data) || data.phoneNumber is string && data.phoneNumber.size() < 30) &&
+             (!('bio' in data) || data.bio is string && data.bio.size() < 500) &&
+             (!('avatarUrl' in data) || data.avatarUrl is string && data.avatarUrl.size() < 2000) &&
+             (!('walletId' in data) || data.walletId is string && data.walletId.size() < 128) &&
+             (!('balance' in data) || data.balance is number) &&
+             (!('role' in data) || data.role in ['admin', 'user']) &&
+             (!('holdings' in data) || data.holdings is list && data.holdings.size() < 100) &&
+             (!('transactions' in data) || data.transactions is list && data.transactions.size() < 500);
+    }
+
+    function isValidAsset(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() < 128 &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.artist is string && data.artist.size() > 0 && data.artist.size() < 200 &&
+             data.totalValue is number && data.totalValue >= 0 &&
+             data.fractionPrice is number && data.fractionPrice >= 0 &&
+             (!('description' in data) || data.description is string && data.description.size() < 2000) &&
+             (!('imageUrl' in data) || data.imageUrl is string && data.imageUrl.size() < 2000) &&
+             (!('gallery' in data) || data.gallery is list && data.gallery.size() < 50);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      
+      allow create: if isOwner(userId) && 
+                      isValidUser(request.resource.data) && 
+                      (request.resource.data.role == 'user' || isAdmin());
+      
+      allow update: if (isOwner(userId) || isAdmin()) && 
+                      isValidUser(request.resource.data) && 
+                      (request.resource.data.role == resource.data.role || isAdmin());
+      
+      allow delete: if isAdmin();
+    }
+
+    match /assets/{assetId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /test/connection {
+      allow read: if isAuthenticated();
+    }
+  }
+}
